@@ -1,5 +1,7 @@
 <!doctype html>
-<html lang="es"><head><meta charset="utf-8">
+<html lang="es">
+<head>
+<meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>SquatLab - Análisis bioinstrumental de la sentadilla</title>
 <style>
@@ -9,8 +11,12 @@ header,main{max-width:1100px;margin:auto;padding:16px}
 h1{margin:0;font-size:22px}h2{margin:0 0 8px;font-size:16px}p.s{color:var(--mut);margin:4px 0 0}
 .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}@media(max-width:800px){.grid{grid-template-columns:1fr}}
 .card{background:var(--card);border-radius:12px;padding:14px}
-.stage{position:relative;margin:8px 0}video,#ov{width:100%;display:block;border-radius:8px;background:#000;max-height:360px}
-#ov{position:absolute;left:0;top:0;height:100%;pointer-events:none}
+
+/* Contenedor del video y canvas corregido */
+.stage{position:relative;margin:8px 0;width:100%;background:#000;border-radius:8px;overflow:hidden;display:flex;justify-content:center;align-items:center}
+video{width:100%;max-height:360px;display:block;object-fit:contain}
+#ov{position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;object-fit:contain}
+
 button,label.b{background:var(--ac);color:#04243a;border:0;border-radius:8px;padding:8px 12px;font-weight:600;cursor:pointer;display:inline-block;margin:3px 3px 3px 0;font-size:14px}
 .g{background:#334155!important;color:var(--tx)!important}button:disabled{opacity:.45;cursor:default}
 input[type=file]{display:none}.row{display:flex;align-items:center;gap:8px;margin:6px 0;flex-wrap:wrap}.row span{min-width:150px;color:var(--mut)}
@@ -20,7 +26,9 @@ table{width:100%;border-collapse:collapse;font-size:13px}td,th{padding:5px 6px;b
 .kk{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:10px}.kk div{background:#0b1220;border-radius:8px;padding:8px}.kk small{color:var(--mut);display:block}.k{font-size:22px;font-weight:700;color:var(--ac)}
 #st{color:var(--mut);margin:6px 0;min-height:20px}#interp{margin:8px 0;padding:8px;border-left:3px solid var(--ac);background:#0b1220;font-size:13px}
 details{margin-top:8px;color:var(--mut);font-size:13px}
-</style></head><body>
+</style>
+</head>
+<body>
 <header>
 <h1>SquatLab · Análisis bioinstrumental de la sentadilla</h1>
 <p class="s">Problema: profundidad insuficiente durante la sentadilla en rehabilitación de rodilla. Variable: ángulo de flexión de rodilla (cadera-rodilla-tobillo).</p>
@@ -31,9 +39,18 @@ details{margin-top:8px;color:var(--mut);font-size:13px}
 <label class="b">Cargar video<input id="fv" type="file" accept="video/*"></label>
 <label class="b g">Cargar CSV (t, ángulo)<input id="fc" type="file" accept=".csv,text/csv"></label>
 <button class="g" id="demo">Datos de demostración</button>
-<div class="stage"><video id="v" playsinline muted controls></video><canvas id="ov"></canvas></div>
-<div class="row"><button id="go">Analizar video</button><button id="stop" class="g" disabled>Detener</button>
-<select id="rate"><option value="0.5">Velocidad 0.5x (más preciso)</option><option value="1">Velocidad 1x</option></select></div>
+<div class="stage">
+  <video id="v" playsinline muted controls></video>
+  <canvas id="ov"></canvas>
+</div>
+<div class="row">
+  <button id="go">Analizar video</button>
+  <button id="stop" class="g" disabled>Detener</button>
+  <select id="rate">
+    <option value="0.5">Velocidad 0.5x (más preciso)</option>
+    <option value="1">Velocidad 1x</option>
+  </select>
+</div>
 <h2 style="margin-top:12px">2. Parámetros</h2>
 <div class="row"><span>Lado analizado</span><select id="side"><option value="L">Izquierda</option><option value="R">Derecha</option></select></div>
 <div class="row"><span>Suavizado: <b id="smv">5</b> cuadros</span><input id="sm" type="range" min="1" max="15" step="2" value="5"></div>
@@ -58,7 +75,7 @@ let lm=null,MP=null,data=[],running=false,lastTs=0,out=null;
 const st=m=>$('st').textContent=m;
 const setB=()=>{$('go').disabled=running;$('stop').disabled=!running};
 
-/* ---------- Modelo de pose (MediaPipe, corre en el navegador) ---------- */
+/* ---------- Modelo de pose (MediaPipe) ---------- */
 async function initPose(){
   if(lm)return;
   st('Cargando modelo de pose (primera vez, ~10 s)...');
@@ -69,46 +86,92 @@ async function initPose(){
 }
 
 /* ---------- Cinemática ---------- */
-function ang(a,b,c){const u=[a.x-b.x,a.y-b.y],w=[c.x-b.x,c.y-b.y],m=Math.hypot(...u)*Math.hypot(...w);
-  return m?Math.acos(Math.max(-1,Math.min(1,(u[0]*w[0]+u[1]*w[1])/m)))*180/Math.PI:NaN}
+function ang(a,b,c){
+  const u=[a.x-b.x,a.y-b.y],w=[c.x-b.x,c.y-b.y],m=Math.hypot(...u)*Math.hypot(...w);
+  return m?Math.acos(Math.max(-1,Math.min(1,(u[0]*w[0]+u[1]*w[1])/m)))*180/Math.PI:NaN
+}
 function knee(p,h,k,a,W,H){
-  if(Math.min(p[h].visibility,p[k].visibility,p[a].visibility)<.5)return NaN;
-  const P=i=>({x:p[i].x*W,y:p[i].y*H});return ang(P(h),P(k),P(a))}
+  if(!p[h]||!p[k]||!p[a]) return NaN;
+  if(Math.min(p[h].visibility||1,p[k].visibility||1,p[a].visibility||1)<.4)return NaN;
+  const P=i=>({x:p[i].x*W,y:p[i].y*H});return ang(P(h),P(k),P(a))
+}
 function draw(p){
-  oc.clearRect(0,0,ov.width,ov.height);if(!p)return;
+  oc.clearRect(0,0,ov.width,ov.height);
+  if(!p)return;
   oc.lineWidth=Math.max(3,ov.width/200);
   [[23,25,27,'#38bdf8'],[24,26,28,'#f472b6']].forEach(([h,k,a,c])=>{
-    oc.strokeStyle=oc.fillStyle=c;oc.beginPath();
-    [h,k,a].forEach((i,j)=>j?oc.lineTo(p[i].x*ov.width,p[i].y*ov.height):oc.moveTo(p[i].x*ov.width,p[i].y*ov.height));oc.stroke();
-    [h,k,a].forEach(i=>{oc.beginPath();oc.arc(p[i].x*ov.width,p[i].y*ov.height,oc.lineWidth*1.5,0,7);oc.fill()})})}
+    if(!p[h]||!p[k]||!p[a]) return;
+    oc.strokeStyle=oc.fillStyle=c;
+    oc.beginPath();
+    [h,k,a].forEach((i,j)=>j?oc.lineTo(p[i].x*ov.width,p[i].y*ov.height):oc.moveTo(p[i].x*ov.width,p[i].y*ov.height));
+    oc.stroke();
+    [h,k,a].forEach(i=>{oc.beginPath();oc.arc(p[i].x*ov.width,p[i].y*ov.height,oc.lineWidth*1.5,0,7);oc.fill()});
+  });
+}
 
 /* ---------- Adquisición desde video ---------- */
 async function analizar(){
   if(!vid.src){st('Primero cargue un video.');return}
   try{await initPose()}catch(e){st('No se pudo cargar el modelo (¿sin internet?). Use CSV o demo.');return}
-  data=[];running=true;setB();ov.width=vid.videoWidth;ov.height=vid.videoHeight;
-  vid.currentTime=0;vid.playbackRate=+$('rate').value;st('Analizando...');
-  await vid.play();sched();
+  data=[];running=true;setB();
+  
+  // Sincronizar dimensiones reales del video con el canvas
+  ov.width=vid.videoWidth||640;
+  ov.height=vid.videoHeight||480;
+  
+  vid.currentTime=0;
+  vid.playbackRate=+$('rate').value;
+  st('Analizando...');
+  await vid.play();
+  lastTs=performance.now();
+  sched();
 }
-const sched=()=>vid.requestVideoFrameCallback?vid.requestVideoFrameCallback(loop):requestAnimationFrame(()=>loop());
+
+const sched=()=> {
+  if(!running) return;
+  if(vid.requestVideoFrameCallback){
+    vid.requestVideoFrameCallback(loop);
+  } else {
+    requestAnimationFrame(()=>loop());
+  }
+};
+
 function loop(_,meta){
   if(!running)return;
-  const t=meta?meta.mediaTime:vid.currentTime;lastTs=Math.max(lastTs+1,performance.now());
-  const p=lm.detectForVideo(vid,lastTs).landmarks[0];draw(p);
-  data.push({t,L:p?knee(p,23,25,27,vid.videoWidth,vid.videoHeight):NaN,R:p?knee(p,24,26,28,vid.videoWidth,vid.videoHeight):NaN});
-  st(`Analizando... t = ${t.toFixed(1)} s`);sched();
+  const t=meta?meta.mediaTime:vid.currentTime;
+  lastTs=Math.max(lastTs+1,performance.now());
+  
+  let p=null;
+  if(vid.readyState >= 2){
+    const res=lm.detectForVideo(vid,lastTs);
+    if(res && res.landmarks && res.landmarks.length>0){
+      p=res.landmarks[0];
+    }
+  }
+  
+  draw(p);
+  data.push({
+    t,
+    L:p?knee(p,23,25,27,vid.videoWidth,vid.videoHeight):NaN,
+    R:p?knee(p,24,26,28,vid.videoWidth,vid.videoHeight):NaN
+  });
+  
+  st(`Analizando... t = ${t.toFixed(1)} s`);
+  sched();
 }
+
 function finish(){running=false;vid.pause();setB();if(data.length){st(`Análisis completo: ${data.length} cuadros procesados.`);procesar()}}
 vid.onended=()=>{if(running)finish()};
 
 /* ---------- Procesamiento ---------- */
 const ma=(a,k)=>a.map((_,i)=>{let s=0,n=0;for(let j=Math.max(0,i-(k>>1));j<=Math.min(a.length-1,i+(k>>1));j++)if(!isNaN(a[j])){s+=a[j];n++}return n?s/n:NaN});
-function reps(s,dn,up){ // máquina de estados: arriba -> abajo (< dn) -> arriba (>= up)
+function reps(s,dn,up){
   const r=[];let top=0,bot=0,state=0;
   s.forEach((v,i)=>{if(isNaN(v))return;
     if(!state){if(v>=up)top=i;if(v<dn){state=1;bot=i}}
     else{if(v<s[bot])bot=i;if(v>=up){r.push({a:top,b:bot,c:i});state=0;top=i}}});
-  return r}
+  return r
+}
 function procesar(){
   if(data.length<5){st('Datos insuficientes.');return}
   const t=data.map(d=>d.t),k=+$('sm').value,sd=$('side').value;
@@ -145,18 +208,42 @@ function chart(){
 }
 addEventListener('resize',chart);
 
-/* ---------- Otras fuentes de entrada: CSV y demo ---------- */
-$('fv').onchange=e=>{const f=e.target.files[0];if(!f)return;vid.src=URL.createObjectURL(f);vid.onloadedmetadata=()=>st('Video cargado. Presione "Analizar video".')};
-$('fc').onchange=async e=>{const f=e.target.files[0];if(!f)return;
+/* ---------- Eventos de entrada ---------- */
+$('fv').onchange=e=>{
+  const f=e.target.files[0];
+  if(!f)return;
+  vid.src=URL.createObjectURL(f);
+  vid.onloadedmetadata=()=>{
+    ov.width=vid.videoWidth;
+    ov.height=vid.videoHeight;
+    st('Video cargado. Presione "Analizar video".');
+  };
+};
+
+$('fc').onchange=async e=>{
+  const f=e.target.files[0];if(!f)return;
   const rows=(await f.text()).trim().split(/\r?\n/).map(l=>l.split(/[;,\t]/).map(Number)).filter(r=>r.length>=2&&r.every(v=>!isNaN(v)));
   if(rows.length<5){st('CSV inválido: se requieren columnas t(s) y ángulo.');return}
-  data=rows.map(r=>({t:r[0],L:r[1],R:r[1]}));st(`CSV cargado: ${data.length} muestras.`);procesar()};
-$('demo').onclick=()=>{ // datos SINTÉTICOS solo para probar la interfaz
+  data=rows.map(r=>({t:r[0],L:r[1],R:r[1]}));st(`CSV cargado: ${data.length} muestras.`);procesar()
+};
+
+$('demo').onclick=()=>{
   data=[];for(let i=0;i<=420;i++){const t=i/30;let L=170;
     for(let k=0;k<4;k++){const u=(t-1-k*3.2)/3.2;if(u>=0&&u<=1){const w=u<.55?u/.55*.5:.5+(u-.55)/.45*.5,b=.5-.5*Math.cos(2*Math.PI*w);L-=(85-k*2)*b}}
     const v=L+Math.sin(i*7)*1.2;data.push({t,L:v,R:v})}
-  st('Datos sintéticos de demostración (no son un registro real).');procesar()};
-$('go').onclick=analizar;$('stop').onclick=finish;
-$('dl').onclick=()=>{const{t,s}=out;const csv='t_s,angulo_rodilla_deg\n'+t.map((v,i)=>[v,s[i]].map(q=>+q.toFixed(3)).join(',')).join('\n');
-  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download='sentadilla_procesada.csv';a.click()};
-</script></body></html>
+  st('Datos sintéticos de demostración (no son un registro real).');procesar()
+};
+
+$('go').onclick=analizar;
+$('stop').onclick=finish;
+$('dl').onclick=()=>{
+  const{t,s}=out;
+  const csv='t_s,angulo_rodilla_deg\n'+t.map((v,i)=>[v,s[i]].map(q=>+q.toFixed(3)).join(',')).join('\n');
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));
+  a.download='sentadilla_procesada.csv';
+  a.click();
+};
+</script>
+</body>
+</html>
