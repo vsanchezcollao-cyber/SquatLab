@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SquatLab - Análisis bioinstrumental de la sentadilla</title>
+<style>
+:root{--bg:#0f172a;--card:#1e293b;--tx:#e2e8f0;--mut:#94a3b8;--ac:#38bdf8}
+*{box-sizing:border-box}body{margin:0;font:15px system-ui,sans-serif;background:var(--bg);color:var(--tx)}
+header,main{max-width:1100px;margin:auto;padding:16px}
+h1{margin:0;font-size:22px}h2{margin:0 0 8px;font-size:16px}p.s{color:var(--mut);margin:4px 0 0}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}@media(max-width:800px){.grid{grid-template-columns:1fr}}
+.card{background:var(--card);border-radius:12px;padding:14px}
+.stage{position:relative;margin:8px 0}video,#ov{width:100%;display:block;border-radius:8px;background:#000;max-height:360px}
+#ov{position:absolute;left:0;top:0;height:100%;pointer-events:none}
+button,label.b{background:var(--ac);color:#04243a;border:0;border-radius:8px;padding:8px 12px;font-weight:600;cursor:pointer;display:inline-block;margin:3px 3px 3px 0;font-size:14px}
+.g{background:#334155!important;color:var(--tx)!important}button:disabled{opacity:.45;cursor:default}
+input[type=file]{display:none}.row{display:flex;align-items:center;gap:8px;margin:6px 0;flex-wrap:wrap}.row span{min-width:150px;color:var(--mut)}
+select{background:#0b1220;color:var(--tx);border:1px solid #334155;border-radius:6px;padding:4px}
+#ch{width:100%;height:260px;background:#0b1220;border-radius:8px}
+table{width:100%;border-collapse:collapse;font-size:13px}td,th{padding:5px 6px;border-bottom:1px solid #334155;text-align:left}th{color:var(--mut);font-weight:500}
+.kk{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:10px}.kk div{background:#0b1220;border-radius:8px;padding:8px}.kk small{color:var(--mut);display:block}.k{font-size:22px;font-weight:700;color:var(--ac)}
+#st{color:var(--mut);margin:6px 0;min-height:20px}#interp{margin:8px 0;padding:8px;border-left:3px solid var(--ac);background:#0b1220;font-size:13px}
+details{margin-top:8px;color:var(--mut);font-size:13px}
+</style></head><body>
+<header>
+<h1>SquatLab · Análisis bioinstrumental de la sentadilla</h1>
+<p class="s">Problema: profundidad insuficiente durante la sentadilla en rehabilitación de rodilla. Variable: ángulo de flexión de rodilla (cadera-rodilla-tobillo).</p>
+</header>
+<main class="grid">
+<section class="card">
+<h2>1. Entrada de datos</h2>
+<label class="b">Cargar video<input id="fv" type="file" accept="video/*"></label>
+<label class="b g">Cargar CSV (t, ángulo)<input id="fc" type="file" accept=".csv,text/csv"></label>
+<button class="g" id="demo">Datos de demostración</button>
+<div class="stage"><video id="v" playsinline muted controls></video><canvas id="ov"></canvas></div>
+<div class="row"><button id="go">Analizar video</button><button id="stop" class="g" disabled>Detener</button>
+<select id="rate"><option value="0.5">Velocidad 0.5x (más preciso)</option><option value="1">Velocidad 1x</option></select></div>
+<h2 style="margin-top:12px">2. Parámetros</h2>
+<div class="row"><span>Lado analizado</span><select id="side"><option value="L">Izquierda</option><option value="R">Derecha</option></select></div>
+<div class="row"><span>Suavizado: <b id="smv">5</b> cuadros</span><input id="sm" type="range" min="1" max="15" step="2" value="5"></div>
+<div class="row"><span>Umbral descenso: <b id="dnv">130</b>°</span><input id="dn" type="range" min="80" max="150" value="130"></div>
+<div class="row"><span>Umbral ascenso: <b id="upv">160</b>°</span><input id="up" type="range" min="140" max="178" value="160"></div>
+<div id="st">Cargue un video, un CSV o use los datos de demostración.</div>
+<details><summary>Recomendaciones de registro</summary>Cámara fija a 2-3 m, altura de cadera, vista lateral (plano sagital) con la pierna a analizar hacia la cámara, cuerpo completo visible, buena luz. El ángulo es una proyección 2D: es un valor aproximado, no goniometría 3D. CSV: columnas tiempo (s) y ángulo de rodilla (°).</details>
+</section>
+<section class="card">
+<h2>3. Resultados</h2>
+<div class="kk"><div><small>Repeticiones</small><span class="k" id="kr">-</span></div><div><small>Ángulo mínimo medio</small><span class="k" id="kd">-</span></div><div><small>Rango de movimiento medio</small><span class="k" id="ka">-</span></div></div>
+<canvas id="ch"></canvas>
+<table><thead><tr><th>Rep</th><th>Prof. (°)</th><th>Descenso (s)</th><th>Ascenso (s)</th><th>Vel. desc. (°/s)</th><th>Rango (°)</th></tr></thead><tbody id="tb"></tbody></table>
+<div id="interp" hidden></div>
+<div class="row"><button id="dl" class="g" disabled>Descargar CSV procesado</button></div>
+</section>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+const vid=$('v'),ov=$('ov'),oc=ov.getContext('2d');
+let lm=null,MP=null,data=[],running=false,lastTs=0,out=null;
+const st=m=>$('st').textContent=m;
+const setB=()=>{$('go').disabled=running;$('stop').disabled=!running};
+
+/* ---------- Modelo de pose (MediaPipe, corre en el navegador) ---------- */
+async function initPose(){
+  if(lm)return;
+  st('Cargando modelo de pose (primera vez, ~10 s)...');
+  const V='https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14';
+  MP=await import(V+'/vision_bundle.mjs');
+  const fs=await MP.FilesetResolver.forVisionTasks(V+'/wasm');
+  lm=await MP.PoseLandmarker.createFromOptions(fs,{baseOptions:{modelAssetPath:'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task'},runningMode:'VIDEO',numPoses:1});
+}
+
+/* ---------- Cinemática ---------- */
+function ang(a,b,c){const u=[a.x-b.x,a.y-b.y],w=[c.x-b.x,c.y-b.y],m=Math.hypot(...u)*Math.hypot(...w);
+  return m?Math.acos(Math.max(-1,Math.min(1,(u[0]*w[0]+u[1]*w[1])/m)))*180/Math.PI:NaN}
+function knee(p,h,k,a,W,H){
+  if(Math.min(p[h].visibility,p[k].visibility,p[a].visibility)<.5)return NaN;
+  const P=i=>({x:p[i].x*W,y:p[i].y*H});return ang(P(h),P(k),P(a))}
+function draw(p){
+  oc.clearRect(0,0,ov.width,ov.height);if(!p)return;
+  oc.lineWidth=Math.max(3,ov.width/200);
+  [[23,25,27,'#38bdf8'],[24,26,28,'#f472b6']].forEach(([h,k,a,c])=>{
+    oc.strokeStyle=oc.fillStyle=c;oc.beginPath();
+    [h,k,a].forEach((i,j)=>j?oc.lineTo(p[i].x*ov.width,p[i].y*ov.height):oc.moveTo(p[i].x*ov.width,p[i].y*ov.height));oc.stroke();
+    [h,k,a].forEach(i=>{oc.beginPath();oc.arc(p[i].x*ov.width,p[i].y*ov.height,oc.lineWidth*1.5,0,7);oc.fill()})})}
+
+/* ---------- Adquisición desde video ---------- */
+async function analizar(){
+  if(!vid.src){st('Primero cargue un video.');return}
+  try{await initPose()}catch(e){st('No se pudo cargar el modelo (¿sin internet?). Use CSV o demo.');return}
+  data=[];running=true;setB();ov.width=vid.videoWidth;ov.height=vid.videoHeight;
+  vid.currentTime=0;vid.playbackRate=+$('rate').value;st('Analizando...');
+  await vid.play();sched();
+}
+const sched=()=>vid.requestVideoFrameCallback?vid.requestVideoFrameCallback(loop):requestAnimationFrame(()=>loop());
+function loop(_,meta){
+  if(!running)return;
+  const t=meta?meta.mediaTime:vid.currentTime;lastTs=Math.max(lastTs+1,performance.now());
+  const p=lm.detectForVideo(vid,lastTs).landmarks[0];draw(p);
+  data.push({t,L:p?knee(p,23,25,27,vid.videoWidth,vid.videoHeight):NaN,R:p?knee(p,24,26,28,vid.videoWidth,vid.videoHeight):NaN});
+  st(`Analizando... t = ${t.toFixed(1)} s`);sched();
+}
+function finish(){running=false;vid.pause();setB();if(data.length){st(`Análisis completo: ${data.length} cuadros procesados.`);procesar()}}
+vid.onended=()=>{if(running)finish()};
+
+/* ---------- Procesamiento ---------- */
+const ma=(a,k)=>a.map((_,i)=>{let s=0,n=0;for(let j=Math.max(0,i-(k>>1));j<=Math.min(a.length-1,i+(k>>1));j++)if(!isNaN(a[j])){s+=a[j];n++}return n?s/n:NaN});
+function reps(s,dn,up){ // máquina de estados: arriba -> abajo (< dn) -> arriba (>= up)
+  const r=[];let top=0,bot=0,state=0;
+  s.forEach((v,i)=>{if(isNaN(v))return;
+    if(!state){if(v>=up)top=i;if(v<dn){state=1;bot=i}}
+    else{if(v<s[bot])bot=i;if(v>=up){r.push({a:top,b:bot,c:i});state=0;top=i}}});
+  return r}
+function procesar(){
+  if(data.length<5){st('Datos insuficientes.');return}
+  const t=data.map(d=>d.t),k=+$('sm').value,sd=$('side').value;
+  const L=ma(data.map(d=>d.L),k),R=ma(data.map(d=>d.R),k);
+  const s=sd=='L'?L:R;
+  const dn=+$('dn').value,up=Math.max(+$('up').value,dn+10),rs=reps(s,dn,up);
+  const rows=rs.map(r=>{const te=t[r.b]-t[r.a];return{d:s[r.b],te,tc:t[r.c]-t[r.b],v:(s[r.a]-s[r.b])/te,as:s[r.a]-s[r.b]}});
+  const mean=f=>{const x=rows.map(f).filter(v=>!isNaN(v));return x.length?x.reduce((a,b)=>a+b)/x.length:NaN};
+  $('tb').innerHTML=rows.map((r,i)=>`<tr><td>${i+1}</td><td>${r.d.toFixed(1)}</td><td>${r.te.toFixed(2)}</td><td>${r.tc.toFixed(2)}</td><td>${r.v.toFixed(0)}</td><td>${isNaN(r.as)?'-':r.as.toFixed(0)}</td></tr>`).join('');
+  const md=mean(r=>r.d),ma_=mean(r=>r.as);
+  $('kr').textContent=rows.length;$('kd').textContent=rows.length?md.toFixed(0)+'°':'-';$('ka').textContent=isNaN(ma_)?'-':ma_.toFixed(0)+'°';
+  const I=$('interp');I.hidden=!rows.length;
+  if(rows.length)I.textContent='Interpretación orientativa: '+(md<=95?'profundidad cercana a paralelo o mayor':md<=115?'profundidad parcial-media':'profundidad limitada')+'; rango de movimiento medio de '+ma_.toFixed(0)+'°. Umbrales no validados clínicamente.';
+  if(!rows.length)st('No se detectaron repeticiones: ajuste los umbrales o revise el registro.');
+  out={t,L,R,s,rs,dn,up};chart();$('dl').disabled=false;
+}
+for(const id of['sm','dn','up','side'])$(id).oninput=()=>{$('smv').textContent=$('sm').value;$('dnv').textContent=$('dn').value;$('upv').textContent=$('up').value;if(data.length)procesar()};
+
+/* ---------- Visualización ---------- */
+function chart(){
+  if(!out)return;const{t,L,R,s,rs,dn,up}=out,c=$('ch'),d=devicePixelRatio||1,w=c.clientWidth,h=c.clientHeight;
+  c.width=w*d;c.height=h*d;const x=c.getContext('2d');x.scale(d,d);
+  const m={l:40,r:10,t:10,b:26},T0=t[0],T1=t[t.length-1],Y0=40,Y1=185;
+  const X=v=>m.l+(v-T0)/((T1-T0)||1)*(w-m.l-m.r),Y=v=>m.t+(Y1-v)/(Y1-Y0)*(h-m.t-m.b);
+  x.font='11px system-ui';x.strokeStyle='#243247';x.fillStyle='#94a3b8';
+  for(let a=60;a<=180;a+=30){x.beginPath();x.moveTo(m.l,Y(a));x.lineTo(w-m.r,Y(a));x.stroke();x.fillText(a+'°',6,Y(a)+4)}
+  const n=Math.max(1,Math.min(8,Math.floor(T1-T0)));for(let i=0;i<=n;i++){const v=T0+(T1-T0)*i/n;x.fillText(v.toFixed(1)+' s',X(v)-12,h-8)}
+  rs.forEach(r=>{x.fillStyle='rgba(56,189,248,.12)';x.fillRect(X(t[r.a]),m.t,X(t[r.c])-X(t[r.a]),h-m.t-m.b)});
+  [[dn,'#f59e0b'],[up,'#22c55e']].forEach(([v,col])=>{x.strokeStyle=col;x.setLineDash([5,4]);x.beginPath();x.moveTo(m.l,Y(v));x.lineTo(w-m.r,Y(v));x.stroke();x.setLineDash([])});
+  const line=(a,col,lw)=>{x.strokeStyle=col;x.lineWidth=lw;x.beginPath();let on=0;a.forEach((v,i)=>{if(isNaN(v)){on=0;return}on?x.lineTo(X(t[i]),Y(v)):x.moveTo(X(t[i]),Y(v));on=1});x.stroke();x.lineWidth=1};
+  line(s,'#fff',2.4);
+  rs.forEach(r=>{x.fillStyle='#fff';x.beginPath();x.arc(X(t[r.b]),Y(s[r.b]),4,0,7);x.fill()});
+  x.fillStyle='#fff';x.fillText('■ Ángulo de rodilla analizado',m.l+8,m.t+12);
+}
+addEventListener('resize',chart);
+
+/* ---------- Otras fuentes de entrada: CSV y demo ---------- */
+$('fv').onchange=e=>{const f=e.target.files[0];if(!f)return;vid.src=URL.createObjectURL(f);vid.onloadedmetadata=()=>st('Video cargado. Presione "Analizar video".')};
+$('fc').onchange=async e=>{const f=e.target.files[0];if(!f)return;
+  const rows=(await f.text()).trim().split(/\r?\n/).map(l=>l.split(/[;,\t]/).map(Number)).filter(r=>r.length>=2&&r.every(v=>!isNaN(v)));
+  if(rows.length<5){st('CSV inválido: se requieren columnas t(s) y ángulo.');return}
+  data=rows.map(r=>({t:r[0],L:r[1],R:r[1]}));st(`CSV cargado: ${data.length} muestras.`);procesar()};
+$('demo').onclick=()=>{ // datos SINTÉTICOS solo para probar la interfaz
+  data=[];for(let i=0;i<=420;i++){const t=i/30;let L=170;
+    for(let k=0;k<4;k++){const u=(t-1-k*3.2)/3.2;if(u>=0&&u<=1){const w=u<.55?u/.55*.5:.5+(u-.55)/.45*.5,b=.5-.5*Math.cos(2*Math.PI*w);L-=(85-k*2)*b}}
+    const v=L+Math.sin(i*7)*1.2;data.push({t,L:v,R:v})}
+  st('Datos sintéticos de demostración (no son un registro real).');procesar()};
+$('go').onclick=analizar;$('stop').onclick=finish;
+$('dl').onclick=()=>{const{t,s}=out;const csv='t_s,angulo_rodilla_deg\n'+t.map((v,i)=>[v,s[i]].map(q=>+q.toFixed(3)).join(',')).join('\n');
+  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download='sentadilla_procesada.csv';a.click()};
+</script></body></html>
